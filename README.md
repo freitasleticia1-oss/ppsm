@@ -10,8 +10,24 @@ into REDCap via **Data Import Tool**. Pick whichever fits your machine:
   besides Python itself; nothing runs in a browser.
 - **`app.py`** — Streamlit version, runs as a local web page.
 
-Both read/write the same `data/chart_review_data.csv`, so you can use
-either one interchangeably.
+## Multiple reviewers at the same time
+
+If several people are reviewing charts in parallel, **each person should
+save to their own CSV file** — one shared file being written by multiple
+people at once will overwrite each other's records.
+
+- **Desktop app**: by default it picks a file named after your OS login
+  (e.g. `data/chart_review_data_maria.csv`), shown at the top of the
+  window next to "Saving to:". Click **Change data file...** to create a
+  new file (e.g. `chart_review_data_joao.csv`) or open an existing one.
+  Your choice is remembered for next time you open the app.
+- **Streamlit app**: set the `PPSM_DATA_FILE` environment variable before
+  launching so each reviewer's browser session points at their own file,
+  e.g. `PPSM_DATA_FILE=data/chart_review_data_maria.csv streamlit run app.py`.
+
+Once everyone is done, combine everyone's `chart_review_data_*.csv` files
+(e.g. by concatenating the data rows — they all share the same header) into
+one file before importing into REDCap.
 
 ## Desktop app (Tkinter)
 

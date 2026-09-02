@@ -23,7 +23,22 @@ import streamlit as st
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DICT_PATH = os.path.join(BASE_DIR, "data", "data_dictionary.csv")
 TEMPLATE_PATH = os.path.join(BASE_DIR, "data", "import_template.csv")
-DATA_PATH = os.path.join(BASE_DIR, "data", "chart_review_data.csv")
+DATA_DIR = os.path.join(BASE_DIR, "data")
+
+
+def default_data_filename():
+    """PPSM_DATA_FILE (or PPSM_REVIEWER) lets you pin a default per
+    reviewer/session, e.g. when launching separate instances for separate
+    people. Falls back to a single shared file name."""
+    env_file = os.environ.get("PPSM_DATA_FILE")
+    if env_file:
+        return os.path.basename(env_file)
+    reviewer = os.environ.get("PPSM_REVIEWER")
+    if reviewer:
+        safe = re.sub(r"[^A-Za-z0-9_-]+", "_", reviewer).strip("_")
+        if safe:
+            return f"chart_review_data_{safe}.csv"
+    return "chart_review_data.csv"
 
 FORM_LABELS = {
     "screening_demographics": "Screening & Demographics",
@@ -244,17 +259,18 @@ def render_form(fields, form_name):
 # Record persistence
 # --------------------------------------------------------------------------
 
-def load_records():
-    if os.path.exists(DATA_PATH):
-        return pd.read_csv(DATA_PATH, dtype=str, keep_default_na=False)
+def load_records(data_path):
+    if os.path.exists(data_path):
+        return pd.read_csv(data_path, dtype=str, keep_default_na=False)
     cols = load_template_columns()
     return pd.DataFrame(columns=cols)
 
 
-def save_records(df):
+def save_records(df, data_path):
     cols = load_template_columns()
     df = df.reindex(columns=cols, fill_value="")
-    df.to_csv(DATA_PATH, index=False)
+    os.makedirs(os.path.dirname(data_path) or ".", exist_ok=True)
+    df.to_csv(data_path, index=False)
 
 
 def clear_field_widget_state(fields):
@@ -330,7 +346,28 @@ def main():
     global CALC_FIELDS
     CALC_FIELDS = {f["name"] for f in fields if f["type"] == "calc"}
 
-    df = load_records()
+    # ---- Sidebar: data file (one per reviewer, so concurrent reviews
+    # don't overwrite each other) ----
+    st.sidebar.header("Data file")
+    st.sidebar.caption(
+        "If several people are reviewing charts at the same time, each "
+        "person should use a different file name here."
+    )
+    if "data_filename" not in st.session_state:
+        st.session_state["data_filename"] = default_data_filename()
+    raw_filename = st.sidebar.text_input("File name", key="data_filename")
+    safe_filename = os.path.basename(raw_filename).strip() or "chart_review_data.csv"
+    if not safe_filename.lower().endswith(".csv"):
+        safe_filename += ".csv"
+    data_path = os.path.join(DATA_DIR, safe_filename)
+    st.sidebar.caption(f"Saving to: `data/{safe_filename}`")
+
+    if st.session_state.get("_active_data_path") != data_path:
+        st.session_state["_active_data_path"] = data_path
+        st.session_state["loaded_record"] = None
+        clear_field_widget_state(fields)
+
+    df = load_records(data_path)
 
     # ---- Sidebar: record selection ----
     st.sidebar.header("Records")
@@ -371,18 +408,18 @@ def main():
 
     if st.sidebar.button("Delete this record", disabled=(choice == "__new__")):
         df = df.loc[df["record_id"] != choice]
-        save_records(df)
+        save_records(df, data_path)
         st.session_state["loaded_record"] = None
         st.rerun()
 
     st.sidebar.divider()
     st.sidebar.subheader("Export")
-    if os.path.exists(DATA_PATH):
-        with open(DATA_PATH, "rb") as fh:
+    if os.path.exists(data_path):
+        with open(data_path, "rb") as fh:
             st.sidebar.download_button(
                 "Download REDCap import CSV",
                 data=fh.read(),
-                file_name="PPSOcularFindingsGI_import.csv",
+                file_name=safe_filename,
                 mime="text/csv",
             )
     st.sidebar.caption(f"{len(df)} record(s) saved so far.")
@@ -402,7 +439,7 @@ def main():
             df.loc[df["record_id"] == active_record_id, :] = pd.NA
             df = df.loc[df["record_id"] != active_record_id]
         df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-        save_records(df)
+        save_records(df, data_path)
         st.session_state["loaded_record"] = active_record_id
         st.success(f"Record {active_record_id} saved.")
         st.rerun()

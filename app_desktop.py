@@ -21,17 +21,55 @@ python.org installers.)
 """
 
 import csv
+import getpass
 import os
 import re
 import sys
 import tkinter as tk
-import webbrowser
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DICT_PATH = os.path.join(BASE_DIR, "data", "data_dictionary.csv")
 TEMPLATE_PATH = os.path.join(BASE_DIR, "data", "import_template.csv")
-DATA_PATH = os.path.join(BASE_DIR, "data", "chart_review_data.csv")
+DATA_DIR = os.path.join(BASE_DIR, "data")
+
+# Where each reviewer's last-used data file is remembered, per machine.
+# Not shared/synced — this just lets the app reopen the same file on the
+# next launch, without every reviewer needing to click "Change file".
+LAST_FILE_POINTER = os.path.join(DATA_DIR, ".last_data_path.txt")
+
+
+def default_data_path():
+    """Each reviewer gets their own CSV by default, named after their OS
+    login, so multiple people can review charts at the same time without
+    overwriting each other's file."""
+    try:
+        user = getpass.getuser()
+    except Exception:
+        user = "reviewer"
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", user).strip("_") or "reviewer"
+    return os.path.join(DATA_DIR, f"chart_review_data_{safe}.csv")
+
+
+def load_last_data_path():
+    if os.path.exists(LAST_FILE_POINTER):
+        try:
+            with open(LAST_FILE_POINTER, encoding="utf-8") as f:
+                path = f.read().strip()
+            if path:
+                return path
+        except Exception:
+            pass
+    return default_data_path()
+
+
+def remember_data_path(path):
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(LAST_FILE_POINTER, "w", encoding="utf-8") as f:
+            f.write(path)
+    except Exception:
+        pass
 
 FORM_LABELS = {
     "screening_demographics": "Screening & Demographics",
@@ -166,6 +204,7 @@ class ChartReviewApp:
         self.dependents = {}   # trigger field name -> set(dependent field names)
         self.complete_vars = {}
 
+        self.data_path = load_last_data_path()
         self.records = self.load_records()  # record_id -> row dict
         self.current_record_id = None
         self._suspend_trace = False
@@ -178,8 +217,8 @@ class ChartReviewApp:
 
     def load_records(self):
         records = {}
-        if os.path.exists(DATA_PATH):
-            with open(DATA_PATH, newline="", encoding="utf-8-sig") as f:
+        if os.path.exists(self.data_path):
+            with open(self.data_path, newline="", encoding="utf-8-sig") as f:
                 for row in csv.DictReader(f):
                     rid = row.get("record_id", "")
                     if rid:
@@ -187,8 +226,8 @@ class ChartReviewApp:
         return records
 
     def save_all_records(self):
-        os.makedirs(os.path.dirname(DATA_PATH), exist_ok=True)
-        with open(DATA_PATH, "w", newline="", encoding="utf-8") as f:
+        os.makedirs(os.path.dirname(self.data_path) or ".", exist_ok=True)
+        with open(self.data_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=self.template_cols, extrasaction="ignore")
             writer.writeheader()
             for rid, row in self.records.items():
@@ -197,6 +236,15 @@ class ChartReviewApp:
     # ---------------- UI scaffolding ----------------
 
     def _build_ui(self):
+        file_bar = ttk.Frame(self.root, padding=(8, 6, 8, 0))
+        file_bar.pack(side="top", fill="x")
+        ttk.Label(file_bar, text="Saving to:", font=("TkDefaultFont", 9, "bold")).pack(side="left")
+        self.data_path_var = tk.StringVar(value=self.data_path)
+        ttk.Label(file_bar, textvariable=self.data_path_var, foreground="#0057b7").pack(
+            side="left", padx=(6, 12)
+        )
+        ttk.Button(file_bar, text="Change data file...", command=self.choose_data_file).pack(side="left")
+
         top = ttk.Frame(self.root, padding=8)
         top.pack(side="top", fill="x")
 
@@ -570,7 +618,7 @@ class ChartReviewApp:
     # ---------------- Misc ----------------
 
     def open_data_folder(self):
-        folder = os.path.dirname(DATA_PATH)
+        folder = os.path.dirname(self.data_path) or "."
         os.makedirs(folder, exist_ok=True)
         try:
             if sys.platform.startswith("win"):
@@ -581,6 +629,60 @@ class ChartReviewApp:
                 os.system(f'xdg-open "{folder}"')
         except Exception:
             messagebox.showinfo("Data folder", folder)
+
+    def choose_data_file(self):
+        win = tk.Toplevel(self.root)
+        win.title("Change data file")
+        win.transient(self.root)
+        win.resizable(False, False)
+        ttk.Label(
+            win,
+            text=f"Current file:\n{self.data_path}\n\n"
+                 "Each reviewer should use their own CSV file so that "
+                 "simultaneous chart reviews don't overwrite each other.",
+            wraplength=380, justify="left", padding=12,
+        ).pack()
+        btns = ttk.Frame(win, padding=(12, 0, 12, 12))
+        btns.pack(fill="x")
+        ttk.Button(
+            btns, text="Create new file...",
+            command=lambda: self._pick_new_data_file(win),
+        ).pack(side="left", padx=4, expand=True, fill="x")
+        ttk.Button(
+            btns, text="Open existing file...",
+            command=lambda: self._pick_existing_data_file(win),
+        ).pack(side="left", padx=4, expand=True, fill="x")
+
+    def _pick_new_data_file(self, dialog_win):
+        dialog_win.destroy()
+        path = filedialog.asksaveasfilename(
+            title="Create new chart review data file",
+            initialdir=os.path.dirname(self.data_path) or DATA_DIR,
+            initialfile=os.path.basename(default_data_path()),
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv")],
+        )
+        if path:
+            self._switch_data_file(path)
+
+    def _pick_existing_data_file(self, dialog_win):
+        dialog_win.destroy()
+        path = filedialog.askopenfilename(
+            title="Open existing chart review data file",
+            initialdir=os.path.dirname(self.data_path) or DATA_DIR,
+            filetypes=[("CSV files", "*.csv")],
+        )
+        if path:
+            self._switch_data_file(path)
+
+    def _switch_data_file(self, path):
+        self.data_path = path
+        remember_data_path(path)
+        self.data_path_var.set(path)
+        self.records = self.load_records()
+        self._refresh_record_list()
+        self.new_record()
+        self.status_var.set(f"Now saving to {path} — {len(self.records)} record(s) in this file.")
 
 
 def main():

@@ -1,5 +1,6 @@
 .venv/
 __pycache__/
 *.pyc
-data/chart_review_data.csv
+data/chart_review_data*.csv
+data/.last_data_path.txt
 .streamlit/
