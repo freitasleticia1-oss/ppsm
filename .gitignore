@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+*.pyc
+data/chart_review_data.csv
+.streamlit/
